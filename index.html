@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Title</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <script src="https://github.com/downloads/gnab/remark/remark-0.4.2.min.js" type="text/javascript">
+      { "highlightStyle": "sunburst" }
+    </script>
+    <style type="text/css" media="screen">
+      @import url(http://fonts.googleapis.com/css?family=Droid+Serif);
+      @import url(http://fonts.googleapis.com/css?family=Yanone+Kaffeesatz);
+
+      body {
+        font-family: 'Droid Serif';
+        font-size: 24px;
+        color: #fff;
+      }
+      a {
+        color: #daa420
+      }
+      h1, h2 {
+        font-family: 'Yanone Kaffeesatz';
+        font-weight: 400;
+        color: #daa420
+      }
+      h1 {
+        font-size: 3em;
+      }
+      h2 {
+        font-size: 2em;
+      }
+      h3 {
+        color: #fff;
+        font-size: 1.5em;
+      }
+      .slide {
+        background: url(http://subtlepatterns.subtlepatterns.netdna-cdn.com/patterns/debut_dark.png);
+      }
+      .content {
+        vertical-align: middle;
+      }
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+class: center
+# Organizing Django Settings
+### Jason Peddle
+
+---
+## So wtf is settings, really?
+
+* Settings is a global config object constructed by django.conf.settings.
+
+* You add custom settings to it by creating a settings module and pointing DJANGO_SETTINGS_MODULE at it.
+
+---
+## But I've never set DJANGO_SETTINGS_MODULE!
+
+* Yes you have.
+
+---
+### manage.py
+```python
+if __name__ == "__main__":
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE",
+                          "your_project.settings")
+```
+
+---
+### wsgi.py
+```python
+os.environ.setdefault("DJANGO_SETTINGS_MODULE",
+                      "your_project.settings")
+```
+
+---
+## Ok, so then what happens?
+
+* Let's take a look see!
+
+---
+### django/conf/__init__.py (paraphrased)
+
+```python
+from django.conf import global_settings
+from django.utils import importlib
+ENVIRONMENT_VARIABLE = "DJANGO_SETTINGS_MODULE"
+
+class Settings(object):
+    def __init__(self):
+        settings_module = os\.environ[ENVIRONMENT_VARIABLE]
+
+        for setting in dir(global_settings):
+            setattr(self, setting, getattr(global_settings, setting))
+
+        mod = importlib.import_module(settings_module)
+
+        for setting in dir(mod):
+            setting_value = getattr(mod, setting)
+            setattr(self, setting, setting_value)
+
+settings = Settings()
+```
+
+---
+class: center
+# Evolution of settings
+
+---
+## Local project only
+
+* Hardcode everything in settings.py
+
+```python
+MEDIA_ROOT = '/home/jason/dev/settings_talk/media/'
+```
+
+---
+## Simple production settings
+
+* Google how to keep settings generic so you can use
+  the same settings.py
+
+```python
+SITE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+MEDIA_ROOT = os.path.join(SITE_ROOT, 'media')
+```
+
+---
+## Complicated production settings
+
+* Different database engine/name/user/password?
+
+* Different media/static asset management?
+
+* Test vs Live API keys?
+
+---
+class: center
+## Enter "local_settings.py"
+
+---
+### settings.py for "safe" settings
+### local_settings.py for production settings
+
+```python
+# settings.py
+STRIPE_SECRET_KEY = 'sk_afj89432hadshg0465l' # testing key
+try:
+    from local_settings import *
+except ImportError:
+    pass
+
+# local_settings.py
+STRIPE_SECRET_KEY = 'sk_81nasvba9235n9sdgs6' # live key
+```
+
+---
+## Pros
+
+* Production only settings are only on production.
+
+* Run development without having to configure much.
+
+## Cons
+
+* Production settings aren't in source control.
+
+* When you add servers, local_settings.py start to fall
+  out of sync.
+
+* Can override settings.py, but not extend.
+
+---
+### settings.py for production settings
+### local_settings.py for dev settings
+
+```python
+# settings.py
+STRIPE_SECRET_KEY = 'sk_81nasvba9235n9sdgs6' # live key
+try:
+    from local_settings import *
+except ImportError:
+    pass
+
+# local_settings.py
+STRIPE_SECRET_KEY = 'sk_afj89432hadshg0465l' # testing key
+```
+
+---
+## Pros
+
+* Production settings are in source control
+
+* No need to maintain a local_settings.py on production
+  server.
+
+## Cons
+
+* Forget to override something important in local_settings.py and all of a sudden you blew up your production DB.
+
+* When you add servers, local_settings.py still start to fall out of sync
+
+* Can override settings.py, but not extend.
+
+---
+## Goals
+
+* Source controlled settings for all servers - never SSH into server to edit setting.
+
+* Eliminate possibility of accidentally using production
+  database/email/apis.
+
+* Be able to extend settings locally.
+
+* Not too foreign and wacky like some of the options in
+  https://code.djangoproject.com/wiki/SplitSettings
+
+---
+## First, make settings a directory
+
+* settings.py is just a python module, so it will still
+  import from settings/__init__.py
+
+* This file can either be the default safe common settings.
+
+---
+## Second, add settings/[server].py for each server
+
+* develop.py, staging.py, production.py, local.py
+
+* These files should define the bare minimum the server
+  needs to override. Nothing unique.
+
+---
+```python
+from your_project.settings import *
+
+DEBUG = False
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        #...
+    }
+}
+
+TEMPLATE_LOADERS = (
+    ('django.template.loaders.cached.Loader', TEMPLATE_LOADERS),
+)
+
+INSTALLED_APPS += (
+    'raven.contrib.django',
+)
+```
+
+---
+## DJANGO_SETTINGS_MODULE
+
+* On each server, set the DJANGO_SETTINGS_MODULE (ie in .bash_profile)
+```bash
+export DJANGO_SETTINGS_MODULE='your_project.settings.production'
+```
+
+* If you're using virtualenvwrapper, you can stuff it in your_env/bin/postactivate
+
+* Just put it before any command:
+```bash
+DJANGO_SETTINGS_MODULE='your_project.settings.production' \
+./manage.py shell
+```
+
+---
+## Make things more explicit?
+
+* Define common settings in common.py, leave __init__.py empty
+  to signify "no defaults".
+
+* Change manage.py to remove the fallback to your_project.settings.
+  * It already throws a friendly exception if DJANGO_SETTINGS_MODULE
+    is not set.
+
+---
+## MORE MODULARITY!
+
+* Checkout django-classbasedsettings
+https://github.com/matthewwithanm/django-classbasedsettings
+
+* Checkout django-configurations
+https://github.com/jezdez/django-configurations
+
+---
+# Questions?
+### @jwpeddle
+    </textarea>
+    <div id="slideshow"></div>
+  </body>
+</html>
